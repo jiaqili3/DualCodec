@@ -160,7 +160,7 @@ You can also leave all options empty and it will use the default values.
 ### FAQ
 If you meet problems with environment in this stage, try the following:
 ```
-pip install -U wandb protobuf transformers
+pip install -U wandb protobuf transformers==4.41.2
 ```
 
 
