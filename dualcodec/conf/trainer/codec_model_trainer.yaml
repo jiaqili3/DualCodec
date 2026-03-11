@@ -38,7 +38,7 @@ cfg:
     keep_last: [1]
     run_eval: true
     dataloader:
-      num_worker: 0
+      num_worker: 4
       pin_memory: false
       persistent_workers: false
     use_dynamic_batchsize: true

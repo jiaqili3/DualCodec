@@ -4,7 +4,7 @@ dataloader:
   _target_: torch.utils.data.DataLoader
   dataset: ${..datalist}
   batch_size: null
-  num_workers: 0
+  num_workers: 4
   # prefetch_factor: 20
 
 gluster_opener:
