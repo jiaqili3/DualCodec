@@ -182,7 +182,7 @@ model=dualcodec_12hz_16384_4096_8vq \
 trainer.batch_size=3 \
 data.segment_speech.segment_length=24000
 ```
-This trains from scratch a v1_12hz model with a training batch size of 3. (typically you need larger batch sizes like 10)
+This trains from scratch a v1_12hz model with a training batch size of 3. (in the original model training, we use batch size = 12. Also, you need to change dataset to the full Emilia yourself.)
 
 To train a v1_25Hz model:
 ```bash
@@ -193,7 +193,7 @@ data.segment_speech.segment_length=24000
 
 ```
 
-Below are example training loss curves for a DualCodec 25hz model:
+Below are example training loss curves for the official DualCodec 25hz model:
 
 ![Training Loss Curve 1](losscurve1.png)
 ![Training Loss Curve 2](losscurve2.png)
