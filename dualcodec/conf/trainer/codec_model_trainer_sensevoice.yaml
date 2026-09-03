@@ -1,0 +1,59 @@
+
+sample_rate: 24000
+max_tokens: 15000
+
+num_epochs: 3
+batch_size: 8
+
+exp_name: dualcodec_12hz_sensevoice
+args:
+  exp_name: ${..exp_name}
+  log_level: DEBUG
+  seed: 43
+  resume: false
+  resume_type: resume
+
+cfg:
+  dataloader: null
+  log_dir: ${machine.log_dir}
+  model: ${model.model}
+  semantic_model_type: sensevoice
+  skip_semantic_normalize: true
+  semantic_model:
+    _target_: dualcodec.dataset.processor._build_sensevoice_semantic_model
+    _partial_: false
+    sensevoice_model_path: ${machine.sensevoice_path}
+    sensevoice_prepend_inputs: true
+  discriminator_model: ${model.discriminator}
+  train:
+    gradient_accumulation_step: 1
+    find_unused_parameters: true
+    tracker: tensorboard
+    max_epoch: 1000
+    save_checkpoint_stride:
+      - 5000
+    keep_last: [1]
+    run_eval: true
+    dataloader:
+      num_worker: 4
+      pin_memory: false
+      persistent_workers: false
+    use_dynamic_batchsize: true
+    optimizer:
+      _target_: torch.optim.AdamW
+      _partial_: true
+      lr: 1e-4
+      betas: [0.8, 0.9]
+    adamw:
+      lr: 1e-4
+    scheduler:
+      warmup_steps: 5000
+      total_steps: 1000000
+      min_lr: 5e-5
+    exponentiallr:
+      gamma: 0.999999
+    max_sentences: 64
+trainer:
+  _target_: dualcodec.model_codec.trainer.Trainer
+  cfg: ${..cfg}
+  args: ${..args}

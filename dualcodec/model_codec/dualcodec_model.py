@@ -48,8 +48,10 @@ class DualCodec(nn.Module):
         decode_semantic_for_codec=True,
         is_causal=False,
         semantic_downsample_factor=2,
+        ssl_dim: int = 1024,
     ):
         self.semantic_downsample_factor = semantic_downsample_factor
+        self.ssl_dim = ssl_dim
         super().__init__()
 
         self.dac = DAC(
@@ -70,7 +72,7 @@ class DualCodec(nn.Module):
         self.encoder_rates = encoder_rates
         self.convnext_encoder = nn.Sequential(
             WNConv1d(
-                1024,
+                ssl_dim,
                 convnext_dim,
                 kernel_size=1,
             ),
@@ -98,12 +100,12 @@ class DualCodec(nn.Module):
             ],  # Unpack the list directly into nn.Sequential
             WNConv1d(
                 convnext_dim,
-                1024,
+                ssl_dim,
                 kernel_size=1,
             ),
         )
         if not self.decode_semantic_for_codec:
-            assert convnext_dim == 1024
+            assert convnext_dim == ssl_dim
 
     def semantic_quantize(self, semantic_repr):
         semantic = self.convnext_encoder(semantic_repr)

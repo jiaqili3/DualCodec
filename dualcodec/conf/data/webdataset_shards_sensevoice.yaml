@@ -1,0 +1,95 @@
+
+# WebDataset shard training data for DualCodec-SenseVoice
+dataloader:
+  _target_: torch.utils.data.DataLoader
+  dataset: ${..datalist}
+  batch_size: null
+  num_workers: 4
+  # prefetch_factor: 20
+
+gluster_opener:
+  _target_: dualcodec.dataset.processor.gluster_opener
+  _partial_: true
+  # Shards are already partitioned by rank inside WebDatasetAudioShards.
+  manual_dist_sampler: false
+  min_seconds: 0.5
+  max_seconds: 40.0
+
+gluster_filter:
+  _target_: dualcodec.dataset.processor.gluster_filter
+  _partial_: true
+  is_emilia: true
+  max_length: 2000
+  min_length: 150
+  token_max_length: 300
+  ignore_text: true
+
+resample:
+  _target_: dualcodec.dataset.processor.resample
+  _partial_: true
+  resample_rate: ${trainer.sample_rate}
+
+batch:
+  _target_: dualcodec.dataset.processor.batch
+  _partial_: true
+  batch_type: static
+  batch_size: ${trainer.batch_size}
+  ignore_text: true
+  max_frames_in_batch: null
+
+gluster_padding:
+  _target_: dualcodec.dataset.processor.gluster_padding
+  _partial_: true
+  use_spk_embedding: false
+  return_speech: true
+  ignore_text: true
+
+fbank_feat_extractor:
+  _target_: dualcodec.dataset.processor._build_fbank_feature_extractor
+  _partial_: false
+  sr: 16000
+
+fbank_feature:
+  _target_: dualcodec.dataset.processor.fbank_feature
+  _partial_: true
+  feature_extractor: ${..fbank_feat_extractor}
+
+dataset:
+  _target_: dualcodec.dataset.webdataset_audio.WebDatasetAudioShards
+  shuffle_shards: true
+  shard_shuffle_seed: 42
+  min_seconds: 0.5
+  max_seconds: 40.0
+  partition_by_rank: true
+  shard_patterns:
+    - /F00120260003/flexislm_project/data/S2TT/wenetspeech/shards/train-*.tar
+    - /F00120260003/flexislm_project/data/wenetspeech/shards/train-*.tar
+    - /F00120260003/flexislm_project/data/S2TT/emilia_zh-en/shards/train-*.tar
+    - /F00120260003/flexislm_project/data/S2TT/emilia_en-zh/shards/train-*.tar
+    - /F00120260003/flexislm_project/data/S2TT/common_voice/shards/train-*.tar
+
+datalist_tmp:
+  _target_: dualcodec.dataset.dataset.DataList
+  lists: ${..dataset}
+  shuffle: false
+  partition: false
+
+datalist:
+  _target_: dualcodec.dataset.dataset.prepare_gluster_dataset
+  data_list: ${..datalist_tmp}
+  data_pipeline: ${..data_pipeline}
+
+segment_speech:
+  _target_: dualcodec.dataset.processor.segment_speech
+  _partial_: true
+  # 1.0s @ 24kHz keeps SenseVoice->12.5Hz frames well aligned with DAC hop 1920.
+  segment_length: 76000
+
+data_pipeline:
+  - ${..gluster_opener}
+  - ${..gluster_filter}
+  - ${..resample}
+  - ${..segment_speech}
+  - ${..fbank_feature}
+  - ${..batch}
+  - ${..gluster_padding}

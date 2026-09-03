@@ -13,7 +13,7 @@ from pathlib import Path
 import torch
 from tqdm import tqdm
 import torch.nn as nn
-from dualcodec import BaseTrainer
+from dualcodec.utils.base_trainer import BaseTrainer
 import safetensors
 import numpy as np
 from .discriminator import Discriminator
@@ -76,9 +76,58 @@ class Trainer(BaseTrainer):
         if hasattr(self.model, "module"):
             self.model_module = self.model.module
 
+    def _downsample_semantic_features(self, features: torch.Tensor) -> torch.Tensor:
+        """Downsample (B, C, T) semantic features to the codec frame rate.
+
+        Integer factors use avg_pool1d (w2v-bert ~50Hz path). Fractional factors
+        (e.g. SenseVoice 16.67Hz -> 12.5Hz with factor 1.33333) use linear interpolate,
+        matching FlexiCodec.
+        """
+        factor = self.model_module.semantic_downsample_factor
+        if factor == 1:
+            return features
+        if float(factor) == int(factor):
+            factor = int(factor)
+            return torch.nn.functional.avg_pool1d(features, factor, factor)
+        target_length = int(features.shape[-1] / factor)
+        return torch.nn.functional.interpolate(
+            features,
+            size=target_length,
+            mode="linear",
+            align_corners=False,
+        )
+
     @torch.no_grad()
     @torch.cuda.amp.autocast()
     def _extract_semantic_code(self, input_features, attention_mask):
+        semantic_model_type = getattr(self.cfg, "semantic_model_type", "w2vbert")
+        if semantic_model_type == "sensevoice":
+            semantic_model = self.cfg.semantic_model["model"]
+            if attention_mask is not None:
+                audio_features_lengths = attention_mask.sum(dim=-1).long()
+            else:
+                audio_features_lengths = torch.full(
+                    (input_features.shape[0],),
+                    input_features.shape[1],
+                    device=input_features.device,
+                    dtype=torch.long,
+                )
+            if self.cfg.semantic_model.get("sensevoice_prepend_inputs", True):
+                input_features, audio_features_lengths = semantic_model.prepend_inputs(
+                    input_features, audio_features_lengths
+                )
+            with torch.amp.autocast(device_type="cuda", enabled=False):
+                _encoder_out, _encoder_out_lengths, hidden_out, _hiddens = (
+                    semantic_model.encoder(
+                        input_features.float(),
+                        audio_features_lengths,
+                        extract_hidden=True,
+                    )
+                )
+            # Drop the 4 SenseVoice query tokens; remaining frames are ~16.67Hz.
+            feat = hidden_out[:, 4:]
+            return feat
+
         vq_emb = self.cfg.semantic_model["model"](
             input_features=input_features,
             attention_mask=attention_mask,
@@ -168,11 +217,19 @@ class Trainer(BaseTrainer):
             feat = self._extract_semantic_code(
                 input_features, attention_mask
             ).transpose(1, 2)
-            feat = torch.nn.functional.avg_pool1d(
-                feat,
-                self.model_module.semantic_downsample_factor,
-                self.model_module.semantic_downsample_factor,
-            )
+            feat = self._downsample_semantic_features(feat)
+            # Keep semantic frames within <=2 of DAC frames (hop = prod(encoder_rates)).
+            hop = 1
+            for r in self.model_module.encoder_rates:
+                hop *= int(r)
+            expected_frames = int(x_wav.shape[-1] // hop)
+            if expected_frames > 0 and feat.shape[-1] != expected_frames:
+                feat = torch.nn.functional.interpolate(
+                    feat,
+                    size=expected_frames,
+                    mode="linear",
+                    align_corners=False,
+                )
             out_dict, semantic_edict = self.model(
                 x_wav,
                 semantic_repr=feat,
@@ -267,9 +324,7 @@ class Trainer(BaseTrainer):
             feat = self._extract_semantic_code(
                 input_features, attention_mask
             ).transpose(1, 2)
-            feat = torch.nn.functional.avg_pool1d(
-                feat, self.semantic_downsample_factor, self.semantic_downsample_factor
-            )
+            feat = self._downsample_semantic_features(feat)
             distill_loss = F.mse_loss(
                 feat, first_layer_quantized[..., : feat.shape[-1]]
             )

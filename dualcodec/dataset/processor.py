@@ -22,7 +22,7 @@ import string
 import time
 import transformers
 
-torchaudio.set_audio_backend("soundfile")
+torchaudio.set_audio_backend("soundfile") if hasattr(torchaudio, "set_audio_backend") else None
 AUDIO_FORMAT_SETS = set(["flac", "mp3", "m4a", "ogg", "opus", "wav", "wma"])
 
 
@@ -51,6 +51,76 @@ def _build_semantic_model(semantic_model, mean_var_path, repcodec_model, repcode
         "std": semantic_std,
         "repcodec_model": repcodec_model,
     }
+
+
+def _build_sensevoice_semantic_model(
+    sensevoice_model_path,
+    sensevoice_remote_code=None,
+    sensevoice_prepend_inputs=True,
+):
+    """Build a frozen SenseVoice teacher (FunASR), matching FlexiCodec."""
+    from funasr import AutoModel
+    from pathlib import Path
+
+    if sensevoice_remote_code is None:
+        # Prefer FlexiCodec's customized SenseVoice encoder (extract_hidden support).
+        candidates = [
+            Path(__file__).resolve().parents[3]
+            / "model"
+            / "FlexiCodec"
+            / "flexicodec"
+            / "customized_sensevoice"
+            / "model.py",
+            Path(
+                "/F00120260003/flexislm_project/model/FlexiCodec/flexicodec/customized_sensevoice/model.py"
+            ),
+        ]
+        try:
+            import flexicodec
+
+            candidates.insert(
+                0,
+                Path(flexicodec.__file__).resolve().parent
+                / "customized_sensevoice"
+                / "model.py",
+            )
+        except ImportError:
+            pass
+        for cand in candidates:
+            if cand.is_file():
+                sensevoice_remote_code = str(cand)
+                break
+        if sensevoice_remote_code is None:
+            raise FileNotFoundError(
+                "Could not locate FlexiCodec customized_sensevoice/model.py"
+            )
+
+    funasr_model = AutoModel(
+        model=sensevoice_model_path,
+        trust_remote_code=True,
+        remote_code=sensevoice_remote_code,
+        device="cpu",
+        disable_update=True,
+    )
+    semantic_model = funasr_model.model.eval()
+    for param in semantic_model.parameters():
+        param.requires_grad = False
+    return {
+        "model": semantic_model,
+        "mean": torch.zeros(1),
+        "std": torch.ones(1),
+        "repcodec_model": None,
+        "sensevoice_prepend_inputs": sensevoice_prepend_inputs,
+        "output_idx": None,
+        "layer_idx": None,
+    }
+
+
+def _build_fbank_feature_extractor(sr=16000):
+    """Build SenseVoice FBank frontend (80-mel LFR 7/6 -> ~16.67Hz, dim 560)."""
+    from flexicodec.feature_extractors import FBankGen
+
+    return FBankGen(sr=sr)
 
 
 def segment_w2v(data, segment_length=5 * 50, mode="train"):
@@ -149,6 +219,37 @@ def w2v_feature(data, feature_extractor, mode="train", make_multiple_of=1):
             sample["speech_feat"] = sample["speech_feat"][start_idx:]
             sample["speech_feat_mask"] = sample["speech_feat_mask"][start_idx:]
             yield sample
+
+
+def fbank_feature(data, feature_extractor, mode="train", make_multiple_of=1):
+    """Extract SenseVoice FBank features at ~16.67Hz (dim 560 after LFR).
+
+    Keeps waveform at its current sample rate for the acoustic codec; only the
+    feature frontend is computed on a 16kHz resample.
+    """
+    for sample in data:
+        speech = sample["speech"]
+        if speech.dim() == 1:
+            speech = speech.unsqueeze(0)
+        if sample["sample_rate"] != 16000:
+            speech_16k = torchaudio.functional.resample(
+                speech, sample["sample_rate"], 16000
+            )
+        else:
+            speech_16k = speech
+        # FBankGen expects [batch, N] or [N]
+        mel, _mel_len = feature_extractor.extract_fbank(speech_16k.squeeze(0))
+        # mel: [1, T, D] or [T, D]
+        if mel.dim() == 3:
+            mel = mel.squeeze(0)
+        if make_multiple_of > 1:
+            start_idx = mel.shape[0] % make_multiple_of
+            mel = mel[start_idx:]
+        sample["speech_feat"] = mel.contiguous()
+        sample["speech_feat_mask"] = torch.ones(
+            mel.shape[0], dtype=torch.float32
+        )
+        yield sample
 
 
 def gluster_opener(

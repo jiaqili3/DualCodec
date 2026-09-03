@@ -1,0 +1,28 @@
+defaults:
+  - data: webdataset_shards_sensevoice
+  - machine: devbox_sensevoice
+  - model: dualcodec_12hz_sensevoice
+  - trainer: codec_model_trainer_sensevoice
+  - _self_
+hydra:
+  run:
+    dir: ${machine.log_dir}/${trainer.exp_name}
+
+trainer:
+  exp_name: dualcodec_12hz_sensevoice
+  max_tokens: 2000
+  batch_size: 8
+  cfg:
+    semantic_vq: true
+    semantic_model_type: sensevoice
+    skip_semantic_normalize: true
+    lambda_semantic_commitment_loss: 0.25
+    lambda_semantic_codebook_loss: 1.0
+    lambda_distill_loss: 15.0
+    add_semantic_spec_loss: true
+    train:
+      max_steps: 1000000
+      save_checkpoint_stride:
+        - 20000
+      keep_last: [1]
+      disable_mixed_precision: true

@@ -182,7 +182,7 @@ model=dualcodec_12hz_16384_4096_8vq \
 trainer.batch_size=3 \
 data.segment_speech.segment_length=24000
 ```
-This trains from scratch a v1_12hz model with a training batch size of 3. (in the original model training, we use batch size = 12. Also, you need to change dataset to the full Emilia yourself.)
+This trains from scratch a v1_12hz model with a training batch size of 3. (in the original model training, we use batch size = 12, and segment_length=76000. Also, you need to change dataset to the full Emilia yourself.)
 
 To train a v1_25Hz model:
 ```bash
@@ -213,16 +213,16 @@ huggingface-cli download amphion/dualcodec --local-dir dualcodec_ckpts --revisio
 4. To run example finetuning on Emilia German data (streaming, no need to download files. Need network access to Huggingface):
 ```bash
 accelerate launch train.py --config-name=dualcodec_ft_12hzv1 \
-trainer.batch_size=3 \
-data.segment_speech.segment_length=24000
+trainer.batch_size=12 \
+data.segment_speech.segment_length=76000
 ```
 This finetunes a 12hz_v1 model with a training batch size of 3. (typically you need larger batch sizes like 10)
 
 To finetune a 25Hz_V1 model:
 ```bash
 accelerate launch train.py --config-name=dualcodec_ft_25hzv1 \
-trainer.batch_size=3 \
-data.segment_speech.segment_length=24000
+trainer.batch_size=12 \
+data.segment_speech.segment_length=76000
 ```
 
 
