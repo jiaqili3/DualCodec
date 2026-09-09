@@ -19,6 +19,7 @@ from torch.utils.data import IterableDataset
 
 
 AUDIO_SUFFIXES = (".mp3", ".wav", ".flac", ".m4a", ".ogg", ".opus")
+AUDIO_EXT_NAMES = tuple(suf.lstrip(".") for suf in AUDIO_SUFFIXES)
 
 
 def expand_shard_patterns(patterns: Union[str, Sequence[str]]) -> List[str]:
@@ -43,11 +44,13 @@ def expand_shard_patterns(patterns: Union[str, Sequence[str]]) -> List[str]:
 
 
 def _pick_audio_key(sample: dict) -> Optional[str]:
-    keys = [
-        key
-        for key in sample.keys()
-        if any(key.lower().endswith(suf) for suf in AUDIO_SUFFIXES)
-    ]
+    keys = []
+    for key in sample.keys():
+        lower = key.lower()
+        if any(lower.endswith(suf) for suf in AUDIO_SUFFIXES):
+            keys.append(key)
+        elif lower in AUDIO_EXT_NAMES:
+            keys.append(key)
     if not keys:
         return None
     for key in keys:

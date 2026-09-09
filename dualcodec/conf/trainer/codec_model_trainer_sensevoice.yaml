@@ -12,6 +12,7 @@ args:
   seed: 43
   resume: false
   resume_type: resume
+  resume_from_ckpt_path: ""
 
 cfg:
   dataloader: null

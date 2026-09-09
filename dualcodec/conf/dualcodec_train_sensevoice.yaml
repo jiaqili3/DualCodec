@@ -12,6 +12,10 @@ trainer:
   exp_name: dualcodec_12hz_sensevoice
   max_tokens: 2000
   batch_size: 8
+  args:
+    resume: true
+    resume_type: resume
+    resume_from_ckpt_path: ""
   cfg:
     semantic_vq: true
     semantic_model_type: sensevoice

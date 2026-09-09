@@ -606,7 +606,10 @@ class BaseTrainer(object):
                 ls = list(all_ckpts)
                 ls = [os.path.join(checkpoint_dir, i) for i in ls]
                 ls.sort(
-                    key=lambda x: int(x.split("_")[-2].split("-")[-1]), reverse=True
+                    key=lambda x: int(
+                        os.path.basename(x).split("_")[1].split("-")[1]
+                    ),
+                    reverse=True,
                 )
                 checkpoint_path = ls[0]
                 self.logger.info("Resume from {}".format(checkpoint_path))

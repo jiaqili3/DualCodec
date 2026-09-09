@@ -64,6 +64,7 @@ dataset:
   shard_patterns:
     - /F00120260003/flexislm_project/data/S2TT/wenetspeech/shards/train-*.tar
     - /F00120260003/flexislm_project/data/wenetspeech/shards/train-*.tar
+    - /F00120260003/flexislm_project/data/emilia_zh/Emilia/ZH/*.tar
     - /F00120260003/flexislm_project/data/S2TT/emilia_zh-en/shards/train-*.tar
     - /F00120260003/flexislm_project/data/S2TT/emilia_en-zh/shards/train-*.tar
     - /F00120260003/flexislm_project/data/S2TT/common_voice/shards/train-*.tar
