@@ -23,6 +23,7 @@ pip install dualcodec
 ```
 
 ## News
+- 2026-09-09: Released `12hz_v1.5_sensevoice` (SenseVoice semantic teacher). Use `model_id="12hz_v1.5_sensevoice"`; weights download from [`jiaqili3/dualcodec12hz_v1.5_sensevoice`](https://huggingface.co/jiaqili3/dualcodec12hz_v1.5_sensevoice) when no local path is given.
 - 2025-10-01: FlexiCodec [![ArXiv](https://img.shields.io/badge/arXiv-PDF-green?logo=arxiv&style=flat-square)](https://arxiv.org/abs/2510.00981)  [![Github](https://img.shields.io/badge/GitHub-Code-blue?logo=Github&style=flat-square)](https://github.com/amphionspace/FlexiCodec) [![Demo Page](https://img.shields.io/badge/GitHub.io-Demo_Page-blue?logo=Github&style=flat-square)](https://flexicodec.github.io/) is a new model built on DualCodec, supporting controllable, dynamic frame rate <= 12.5Hz. If you're interested in lower frame rate codecs, welcome to try it out!
 - 2025-05-19: DualCodec is accepted to Interspeech 2025!
 - 2025-03-30: Added automatic downloading from huggingface. Uploaded some TTS models (DualCodec-VALLE, DualCodec-Voicebox).
@@ -37,6 +38,7 @@ pip install dualcodec
 |-----------|------------|----------------------|-------------------------------------|----------------------------------------|---------------------|
 | 12hz_v1   | 12.5Hz     | Any from 1-8 (maximum 8)        | 16384                               | 4096                                   | 100K hours Emilia  |
 | 25hz_v1   | 25Hz       | Any from 1-12 (maximum 12)       | 16384                               | 1024                                   | 100K hours Emilia  |
+| 12hz_v1.5_sensevoice | 12.5Hz | Any from 1-8 (maximum 8) | 16384 | 4096 | WenetSpeech + Emilia + Common Voice (SenseVoice teacher) |
 
 
 ## How to inference DualCodec
@@ -44,7 +46,7 @@ pip install dualcodec
 ```python
 import dualcodec
 
-model_id = "12hz_v1" # select from available Model_IDs, "12hz_v1" or "25hz_v1"
+model_id = "12hz_v1" # select from available Model_IDs, e.g. "12hz_v1", "25hz_v1", "12hz_v1.5_sensevoice"
 
 dualcodec_model = dualcodec.get_model(model_id)
 dualcodec_inference = dualcodec.Inference(dualcodec_model=dualcodec_model, device="cuda")
@@ -75,8 +77,9 @@ First, download checkpoints to local:
 # export HF_ENDPOINT=https://hf-mirror.com      # uncomment this to use huggingface mirror if you're in China
 huggingface-cli download facebook/w2v-bert-2.0 --local-dir w2v-bert-2.0
 huggingface-cli download amphion/dualcodec dualcodec_12hz_16384_4096.safetensors dualcodec_25hz_16384_1024.safetensors w2vbert2_mean_var_stats_emilia.pt --local-dir dualcodec_ckpts
+huggingface-cli download jiaqili3/dualcodec12hz_v1.5_sensevoice dualcodec_12hz_v1.5_sensevoice.safetensors --local-dir dualcodec_ckpts
 ```
-The second command downloads the two DualCodec model (12hz_v1 and 25hz_v1) checkpoints and a w2v-bert-2 mean and variance statistics to the local directory `dualcodec_ckpts`.
+The second command downloads the two DualCodec model (12hz_v1 and 25hz_v1) checkpoints and a w2v-bert-2 mean and variance statistics to the local directory `dualcodec_ckpts`. The third command downloads `12hz_v1.5_sensevoice` (SenseVoice teacher; FunASR SenseVoiceSmall is still required at inference).
 
 Then you can use the following code to inference DualCodec with local checkpoints.
 ```python
@@ -84,7 +87,7 @@ import dualcodec
 
 w2v_path = "./w2v-bert-2.0" # your downloaded path
 dualcodec_model_path = "./dualcodec_ckpts" # your downloaded path
-model_id = "12hz_v1" # select from available Model_IDs, "12hz_v1" or "25hz_v1"
+model_id = "12hz_v1" # select from available Model_IDs, e.g. "12hz_v1", "25hz_v1", "12hz_v1.5_sensevoice"
 
 dualcodec_model = dualcodec.get_model(model_id, dualcodec_model_path)
 dualcodec_inference = dualcodec.Inference(dualcodec_model=dualcodec_model, dualcodec_path=dualcodec_model_path, w2v_path=w2v_path, device="cuda")

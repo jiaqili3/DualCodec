@@ -2,6 +2,7 @@
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
+import os
 import gradio as gr
 import torch
 import torchaudio
@@ -10,8 +11,12 @@ import base64
 import soundfile as sf
 import io
 
-# Model configuration
-MODEL_CONFIGS = {"12hz_v1": {"max_quantizers": 8}, "25hz_v1": {"max_quantizers": 12}}
+# Model configuration (keep last-registered Model_ID last in the dropdown)
+from dualcodec.infer.dualcodec.get_model import MODEL_CONFIGS as CODEC_MODEL_CONFIGS
+
+MODEL_CONFIGS = {
+    k: {"max_quantizers": v["max_quantizers"]} for k, v in CODEC_MODEL_CONFIGS.items()
+}
 
 w2v_path = "./w2v-bert-2.0"
 dualcodec_model_path = "./dualcodec_ckpts"
@@ -21,13 +26,20 @@ current_model = None
 current_inference = None
 
 
+def _local_or_none(path):
+    return path if os.path.exists(path) else None
+
+
 def load_model(model_id):
     global current_model, current_inference
-    current_model = dualcodec.get_model(model_id, dualcodec_model_path)
+    fname = CODEC_MODEL_CONFIGS[model_id]["fname"]
+    local_ckpt = os.path.join(dualcodec_model_path, fname)
+    pretrained = dualcodec_model_path if os.path.isfile(local_ckpt) else None
+    current_model = dualcodec.get_model(model_id, pretrained)
     current_inference = dualcodec.Inference(
         dualcodec_model=current_model,
-        dualcodec_path=dualcodec_model_path,
-        w2v_path=w2v_path,
+        dualcodec_path=pretrained,
+        w2v_path=_local_or_none(w2v_path),
         device="cuda",
     )
     return MODEL_CONFIGS[model_id]["max_quantizers"]

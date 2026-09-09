@@ -74,6 +74,43 @@ def _build_semantic_model(
 
 from cached_path import cached_path
 
+_CLUSTER_SENSEVOICE = "/F00120260003/flexislm_project/model/SenseVoiceSmall"
+_DEFAULT_SENSEVOICE_HF = "FunAudioLLM/SenseVoiceSmall"
+
+
+def _resolve_sensevoice_path(sensevoice_path=None):
+    """Prefer an explicit / env / local SenseVoice checkpoint; else Hugging Face."""
+    if sensevoice_path:
+        return sensevoice_path
+    env_path = os.environ.get("DUALCODEC_SENSEVOICE_PATH")
+    if env_path:
+        return env_path
+    if os.path.isdir(_CLUSTER_SENSEVOICE):
+        return _CLUSTER_SENSEVOICE
+    return _DEFAULT_SENSEVOICE_HF
+
+
+def _build_sensevoice_inference_cfg(sensevoice_path, device="cuda"):
+    from dualcodec.dataset.processor import (
+        _build_fbank_feature_extractor,
+        _build_sensevoice_semantic_model,
+    )
+
+    feat_extractor = _build_fbank_feature_extractor(sr=16000)
+    cfg = _build_sensevoice_semantic_model(
+        sensevoice_model_path=sensevoice_path,
+        sensevoice_prepend_inputs=True,
+    )
+    semantic_model = cfg["model"].to(device).eval()
+    return edict(
+        {
+            "semantic_model": semantic_model,
+            "feature_extractor": feat_extractor,
+            "sensevoice_prepend_inputs": cfg.get("sensevoice_prepend_inputs", True),
+            "skip_semantic_normalize": True,
+        }
+    )
+
 
 class Inference:
     """
@@ -83,8 +120,9 @@ class Inference:
     def __init__(
         self,
         dualcodec_model,
-        dualcodec_path="hf://amphion/dualcodec",
-        w2v_path="hf://facebook/w2v-bert-2.0",
+        dualcodec_path=None,
+        w2v_path=None,
+        sensevoice_path=None,
         device="cuda",
         autocast=True,
         **kwargs,
@@ -92,37 +130,112 @@ class Inference:
         """
         Inputs:
         - dualcodec_model: DualCodec instance, the model weight is loaded by safetensors
-        - dualcodec_path: str, path to the dualcodec model
-        - w2v_path: str, path to the w2v-bert model
+        - dualcodec_path: str, path to the dualcodec model (w2v mean/var stats). Optional;
+          defaults to hf://amphion/dualcodec for w2v-bert models.
+        - w2v_path: str, path to the w2v-bert model. Optional; defaults to
+          hf://facebook/w2v-bert-2.0. Unused for SenseVoice models.
+        - sensevoice_path: str, local FunASR SenseVoiceSmall dir or HF/ModelScope id.
+          Optional; auto-resolved for 12hz_v1.5_sensevoice.
         - device: str, device to run the model
         - autocast: bool, whether to use autocast to fp16 for model inference
         """
-        dualcodec_path = cached_path(dualcodec_path)
-        w2v_path = cached_path(w2v_path)
-
         if not torch.cuda.is_available():
             warnings.warn("CUDA is not available, running on CPU.")
             device = "cpu"
 
-        self.semantic_cfg = _build_semantic_model(
-            dualcodec_path=dualcodec_path,
-            semantic_model_path=w2v_path,
-            device=device,
-            **kwargs,
+        self.semantic_model_type = getattr(
+            dualcodec_model, "semantic_model_type", "w2vbert"
         )
-
         self.model = dualcodec_model
-
         self.model.to(device)
         self.model.eval()
+        self.device = torch.device(device) if isinstance(device, str) else device
+        self.autocast = autocast
+
+        if self.semantic_model_type == "sensevoice":
+            resolved_sv = _resolve_sensevoice_path(sensevoice_path)
+            print("Loading SenseVoice teacher from", resolved_sv)
+            self.semantic_cfg = _build_sensevoice_inference_cfg(
+                resolved_sv, device=str(self.device)
+            )
+        else:
+            if dualcodec_path is None:
+                dualcodec_path = "hf://amphion/dualcodec"
+            if w2v_path is None:
+                w2v_path = "hf://facebook/w2v-bert-2.0"
+            dualcodec_path = cached_path(dualcodec_path)
+            w2v_path = cached_path(w2v_path)
+            self.semantic_cfg = _build_semantic_model(
+                dualcodec_path=dualcodec_path,
+                semantic_model_path=w2v_path,
+                device=str(self.device),
+                **kwargs,
+            )
 
         for key in self.semantic_cfg:
             if isinstance(self.semantic_cfg[key], torch.nn.Module) or isinstance(
                 self.semantic_cfg[key], torch.Tensor
             ):
-                self.semantic_cfg[key] = self.semantic_cfg[key].to(device)
-        self.device = device
-        self.autocast = autocast
+                self.semantic_cfg[key] = self.semantic_cfg[key].to(self.device)
+
+    def _autocast_ctx(self):
+        if not self.autocast:
+            return nullcontext()
+        device_type = "cuda" if self.device.type == "cuda" else "cpu"
+        if device_type != "cuda":
+            return nullcontext()
+        return torch.autocast(device_type=device_type, dtype=torch.float16)
+
+    @torch.no_grad()
+    def _extract_sensevoice_semantic_repr(self, audio):
+        """SenseVoice FBank + encoder, interpolated to DualCodec 12.5Hz frames.
+
+        Args:
+        - audio: torch.Tensor, shape=(B, 1, T) at 24kHz
+        Returns:
+        - feat: torch.Tensor, shape=(B, 512, T_codec)
+        """
+        hop = int(getattr(self.model.dac, "hop_length", 1920))
+        factor = float(self.model.semantic_downsample_factor)
+        semantic_model = self.semantic_cfg.semantic_model
+        feat_extractor = self.semantic_cfg.feature_extractor
+        prepend = self.semantic_cfg.get("sensevoice_prepend_inputs", True)
+        feats = []
+        for i in range(audio.shape[0]):
+            wav_24k = audio[i]
+            if wav_24k.dim() == 2:
+                wav_24k = wav_24k.squeeze(0)
+            wav_16k = torchaudio.functional.resample(wav_24k.cpu(), 24000, 16000)
+            mel, _ = feat_extractor.extract_fbank(wav_16k)
+            if mel.dim() == 3:
+                mel = mel.squeeze(0)
+            input_features = mel.unsqueeze(0).to(self.device)
+            lengths = torch.tensor(
+                [input_features.shape[1]], device=self.device, dtype=torch.long
+            )
+            if prepend:
+                input_features, lengths = semantic_model.prepend_inputs(
+                    input_features.float(), lengths
+                )
+            device_type = "cuda" if self.device.type == "cuda" else "cpu"
+            with torch.amp.autocast(device_type=device_type, enabled=False):
+                _o, _ol, hidden_out, _h = semantic_model.encoder(
+                    input_features.float(),
+                    lengths,
+                    extract_hidden=True,
+                )
+            feat = hidden_out[:, 4:].transpose(1, 2)
+            target_length = max(1, int(feat.shape[-1] / factor))
+            feat = torch.nn.functional.interpolate(
+                feat, size=target_length, mode="linear", align_corners=False
+            )
+            dac_frames = max(1, int(wav_24k.shape[-1] // hop))
+            if feat.shape[-1] != dac_frames:
+                feat = torch.nn.functional.interpolate(
+                    feat, size=dac_frames, mode="linear", align_corners=False
+                )
+            feats.append(feat)
+        return torch.cat(feats, dim=0)
 
     @torch.no_grad()
     def encode(
@@ -138,52 +251,50 @@ class Inference:
         - semantic_codes: torch.Tensor, shape=(B, 1, T), dtype=torch.int, semantic codes
         - acoustic_codes: torch.Tensor, shape=(B, num_vq-1, T), dtype=torch.int, acoustic codes
         """
-        audio_16k = torchaudio.functional.resample(audio, 24000, 16000)
-
-        feature_extractor = self.semantic_cfg.feature_extractor
-
-        if audio.shape[0] > 1:
-            input_features_list = []
-            attention_mask_list = []
-            for i in range(audio.shape[0]):
-                inputs = feature_extractor(
-                    audio_16k[i].cpu(), sampling_rate=16000, return_tensors="pt"
-                )
-                input_features_list.append(inputs["input_features"][0])
-                attention_mask_list.append(inputs["attention_mask"][0])
-            input_features = torch.stack(input_features_list, dim=0)
-            attention_mask = torch.stack(attention_mask_list, dim=0)
-        else:
-            inputs = feature_extractor(
-                audio_16k.cpu(), sampling_rate=16000, return_tensors="pt"
-            )
-            input_features = inputs["input_features"][0]
-            attention_mask = inputs["attention_mask"][0]
-            input_features = input_features.unsqueeze(0)
-            attention_mask = attention_mask.unsqueeze(0)
-
-        input_features = input_features.to(self.device)
-        attention_mask = attention_mask.to(self.device)
         audio = audio.to(self.device)
-
-        # by default, we use autocast for semantic feature extraction
-        with torch.autocast(device_type=self.device, dtype=torch.float16):
-            feat = self._extract_semantic_code(
-                input_features, attention_mask
-            ).transpose(1, 2)
-
-            feat = torch.nn.functional.avg_pool1d(
-                feat,
-                self.model.semantic_downsample_factor,
-                self.model.semantic_downsample_factor,
-            )
-
-        if self.autocast:
-            ctx = torch.autocast(device_type=self.device, dtype=torch.float16)
+        if self.semantic_model_type == "sensevoice":
+            feat = self._extract_sensevoice_semantic_repr(audio)
         else:
-            ctx = nullcontext()
+            audio_16k = torchaudio.functional.resample(audio, 24000, 16000)
 
-        with ctx:
+            feature_extractor = self.semantic_cfg.feature_extractor
+
+            if audio.shape[0] > 1:
+                input_features_list = []
+                attention_mask_list = []
+                for i in range(audio.shape[0]):
+                    inputs = feature_extractor(
+                        audio_16k[i].cpu(), sampling_rate=16000, return_tensors="pt"
+                    )
+                    input_features_list.append(inputs["input_features"][0])
+                    attention_mask_list.append(inputs["attention_mask"][0])
+                input_features = torch.stack(input_features_list, dim=0)
+                attention_mask = torch.stack(attention_mask_list, dim=0)
+            else:
+                inputs = feature_extractor(
+                    audio_16k.cpu(), sampling_rate=16000, return_tensors="pt"
+                )
+                input_features = inputs["input_features"][0]
+                attention_mask = inputs["attention_mask"][0]
+                input_features = input_features.unsqueeze(0)
+                attention_mask = attention_mask.unsqueeze(0)
+
+            input_features = input_features.to(self.device)
+            attention_mask = attention_mask.to(self.device)
+
+            # by default, we use autocast for semantic feature extraction
+            with self._autocast_ctx():
+                feat = self._extract_semantic_code(
+                    input_features, attention_mask
+                ).transpose(1, 2)
+
+                feat = torch.nn.functional.avg_pool1d(
+                    feat,
+                    self.model.semantic_downsample_factor,
+                    self.model.semantic_downsample_factor,
+                )
+
+        with self._autocast_ctx():
             semantic_codes, acoustic_codes = self.model.encode(
                 audio, num_quantizers=n_quantizers, semantic_repr=feat
             )
